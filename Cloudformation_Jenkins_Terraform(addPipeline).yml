@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template to create two EC2 instances, one for Jenkins and one for Terraform, with basic network configuration
+
+Resources:
+  # VPC
+  mokonixLeeVPC:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 200.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: mokonix-lee-VPC
+
+  # Subnet
+  mokonixLeeSubnet:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref mokonixLeeVPC
+      CidrBlock: 200.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs "" ]
+      Tags:
+        - Key: Name
+          Value: mokonix-lee-Subnet
+
+  # Internet Gateway
+  mokonixLeeInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: mokonix-lee-InternetGateway
+
+  # Attach Internet Gateway to VPC
+  mokonixLeeAttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref mokonixLeeVPC
+      InternetGatewayId: !Ref mokonixLeeInternetGateway
+
+  # Route Table
+  mokonixLeeRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref mokonixLeeVPC
+      Tags:
+        - Key: Name
+          Value: mokonix-lee-RouteTable
+
+  # Route - To allow internet access
+  mokonixLeeRoute:
+    Type: AWS::EC2::Route
+    DependsOn: mokonixLeeAttachGateway
+    Properties:
+      RouteTableId: !Ref mokonixLeeRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref mokonixLeeInternetGateway
+
+  # Subnet Route Table Association
+  mokonixLeeSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref mokonixLeeSubnet
+      RouteTableId: !Ref mokonixLeeRouteTable
+
+  # Security Group
+  mokonixLeeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Allow SSH, HTTP, HTTPS, and ICMP
+      VpcId: !Ref mokonixLeeVPC
+      SecurityGroupIngress:
+        # Allow SSH (Port 22)
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        
+        # Allow HTTP (Port 80)
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        
+        # Allow HTTPS (Port 443)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          
+        # Allow Jenkins (Port 8080)
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        
+        # Allow ICMP (Ping) only from your specific IP (180.80.107.4)
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 180.80.107.4/32
+
+      Tags:
+        - Key: Name
+          Value: mokonix-lee-SecurityGroup
+
+  # Jenkins EC2 Instance
+  JenkinsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.large  # 사양 업그레이드 필요 시 여기서 변경 가능
+      KeyName: mokolee
+      ImageId: ami-0023481579962abd4  # Amazon Linux 2023 AMI for ap-northeast-2 (Seoul)
+      SubnetId: !Ref mokonixLeeSubnet
+      SecurityGroupIds:
+        - !Ref mokonixLeeSecurityGroup
+      Tags:
+        - Key: Name
+          Value: mokonix-lee-JenkinsInstance
+      UserData: 
+        Fn::Base64: |
+          #!/bin/bash
+          dnf upgrade -y
+
+          # Java 17 설치
+          dnf install -y java-17-amazon-corretto
+          
+          # Jenkins 설치
+          # wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins-ci.org/redhat/jenkins.repo
+          rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+
+          # rpm --import https://pkg.jenkins-ci.io/redhat/jenkins-ci.org.key
+          dnf config-manager --add-repo http://pkg.jenkins.io/redhat-stable/jenkins.repo
+
+          dnf install jenkins -y
+          systemctl start jenkins
+          systemctl enable jenkins
+          
+          # Docker 설치
+          dnf install docker -y
+          systemctl start docker
+          systemctl enable docker
+          
+          # Jenkins 사용자가 Docker 명령을 사용할 수 있도록 설정
+          usermod -aG docker jenkins
+
+          # Git 설치
+          dnf install git -y
+
+          # Terraform 설치
+          dnf install -y yum-utils
+          dnf config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+          dnf install -y terraform
+
+          # Hostname을 jenkins로 변경
+          hostnamectl set-hostname jenkins
+
+Outputs:
+  JenkinsInstancePublicIP:
+    Description: Public IP of the Jenkins EC2 instance
+    Value: !GetAtt JenkinsInstance.PublicIp
+
+  VPCId:
+    Description: VPC Id
+    Value: !Ref mokonixLeeVPC
+
+  SubnetId:
+    Description: Subnet Id
+    Value: !Ref mokonixLeeSubnet
+
+  SecurityGroupId:
+    Description: Security Group Id
+    Value: !Ref mokonixLeeSecurityGroup
